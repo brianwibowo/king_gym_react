@@ -11,10 +11,13 @@ import POSScreen from '../screens/POSScreen';
 import AttendanceScreen from '../screens/AttendanceScreen';
 import RekapScreen from '../screens/RekapScreen';
 import ProfileScreen from '../screens/ProfileScreen';
-import MemberDetailModal from '../components/MemberDetailModal';
+import MemberDetailScreen from '../screens/MemberDetailScreen';
 import ProductDetailScreen from '../screens/ProductDetailScreen';
 import PresenceDetailScreen from '../screens/PresenceDetailScreen';
 import DateFilterScreen from '../screens/DateFilterScreen'; // Import
+import TopSalesScreen from '../screens/TopSalesScreen';
+import ShiftRecapScreen from '../screens/ShiftRecapScreen';
+import ReportExportScreen from '../screens/ReportExportScreen'; // Import
 // import { theme } from '../config/theme';
 import { ThemeContext } from '../context/ThemeContext';
 import { useContext } from 'react';
@@ -84,6 +87,10 @@ export default function AppNavigator() {
                         <Stack.Screen name="ProductDetail" component={ProductDetailScreen} options={{ title: 'Product Details' }} />
                         <Stack.Screen name="PresenceDetail" component={PresenceDetailScreen} options={{ title: 'Attendance Detail' }} />
                         <Stack.Screen name="DateFilter" component={DateFilterScreen} options={{ presentation: 'modal', headerShown: false }} />
+                        <Stack.Screen name="MemberDetail" component={MemberDetailScreen} options={{ headerShown: false }} />
+                        <Stack.Screen name="TopSales" component={TopSalesScreen} options={{ headerShown: false }} />
+                        <Stack.Screen name="ShiftRecap" component={ShiftRecapScreen} options={{ headerShown: false }} />
+                        <Stack.Screen name="ReportExport" component={ReportExportScreen} options={{ headerShown: false }} />
                     </>
                 )}
             </Stack.Navigator>

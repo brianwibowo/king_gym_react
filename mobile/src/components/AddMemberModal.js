@@ -12,6 +12,7 @@ export default function AddMemberModal({ visible, onClose, onSuccess }) {
         member_code: '',
         name: '',
         address: '',
+        phone: '',
         package_id: null,
         payment_method: 'cash'
     });
@@ -50,6 +51,7 @@ export default function AddMemberModal({ visible, onClose, onSuccess }) {
                 member_code: '',
                 name: '',
                 address: '',
+                phone: '',
                 package_id: null,
                 payment_method: 'cash'
             });
@@ -93,6 +95,19 @@ export default function AddMemberModal({ visible, onClose, onSuccess }) {
                                 placeholderTextColor={theme.colors.textSecondary}
                                 value={formData.name}
                                 onChangeText={(t) => setFormData({ ...formData, name: t })}
+                            />
+                        </View>
+
+                        {/* Phone */}
+                        <View style={styles.inputGroup}>
+                            <Text style={styles.label}>Phone Number</Text>
+                            <TextInput
+                                style={styles.input}
+                                placeholder="08..."
+                                keyboardType="phone-pad"
+                                placeholderTextColor={theme.colors.textSecondary}
+                                value={formData.phone}
+                                onChangeText={(t) => setFormData({ ...formData, phone: t })}
                             />
                         </View>
 

@@ -3,12 +3,16 @@ import { StyleSheet, Text, View, FlatList, TouchableOpacity, ActivityIndicator, 
 import { SafeAreaView } from 'react-native-safe-area-context';
 // import { theme } from '../config/theme';
 import api from '../config/api';
-import { Search, Plus, User, SlidersHorizontal } from 'lucide-react-native';
+import { Search, Plus, User, SlidersHorizontal, FileSpreadsheet } from 'lucide-react-native';
 import AddMemberModal from '../components/AddMemberModal';
-import MemberDetailModal from '../components/MemberDetailModal';
 import { ThemeContext } from '../context/ThemeContext';
+import { MembershipSkeleton } from '../components/Skeleton'; // Import
+import * as FileSystem from 'expo-file-system/legacy';
+import * as Sharing from 'expo-sharing';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { BASE_URL } from '../config/api';
 
-export default function MembershipScreen() {
+export default function MembershipScreen({ navigation }) {
     const { theme } = useContext(ThemeContext);
     const styles = useMemo(() => createStyles(theme), [theme]);
     const [members, setMembers] = useState([]);
@@ -18,10 +22,6 @@ export default function MembershipScreen() {
     const [refreshing, setRefreshing] = useState(false);
     const [selectedCategory, setSelectedCategory] = useState('All');
     const [modalVisible, setModalVisible] = useState(false);
-
-    // Member Detail State
-    const [detailModalVisible, setDetailModalVisible] = useState(false);
-    const [selectedMember, setSelectedMember] = useState(null);
 
     useEffect(() => {
         fetchMembers();
@@ -79,11 +79,6 @@ export default function MembershipScreen() {
         applyFilters(searchQuery, category);
     };
 
-    const handleMemberClick = (member) => {
-        setSelectedMember(member);
-        setDetailModalVisible(true);
-    };
-
     const getStatusColor = (status, expiryDate) => {
         if (status !== 'active') return theme.colors.danger;
 
@@ -92,6 +87,7 @@ export default function MembershipScreen() {
         const diffDays = (expiry - now) / (1000 * 60 * 60 * 24);
 
         if (diffDays < 0) return theme.colors.danger; // Expired
+        if (diffDays <= 7) return '#FFA500'; // Expiring Soon (Orange)
         if (diffDays <= 7) return '#FFA500'; // Expiring Soon (Orange)
         return theme.colors.success; // Active
     };
@@ -107,31 +103,91 @@ export default function MembershipScreen() {
         return 'ACTIVE';
     }
 
+    const handleExport = async () => {
+        try {
+            setLoading(true);
+            const userToken = await AsyncStorage.getItem('userToken');
+
+            if (!userToken) {
+                Alert.alert('Error', 'Unauthorized');
+                return;
+            }
+
+            // Change extension to .xlsx
+            const fileUri = FileSystem.documentDirectory + `members-${new Date().toISOString().split('T')[0]}.xlsx`;
+
+            const downloadRes = await FileSystem.downloadAsync(
+                `${BASE_URL}/members/export`,
+                fileUri,
+                {
+                    headers: { 'Authorization': `Bearer ${userToken}` }
+                }
+            );
+
+            if (downloadRes.status !== 200) {
+                Alert.alert('Error', 'Failed to download file');
+                return;
+            }
+
+            // Success Popup
+            Alert.alert(
+                'Download Successful! ✅',
+                `File saved to your device.\n\nPath: ${fileUri}`,
+                [
+                    { text: 'OK' },
+                    {
+                        text: 'Share/Open', isPreferred: true, onPress: async () => {
+                            if (await Sharing.isAvailableAsync()) {
+                                await Sharing.shareAsync(downloadRes.uri, { mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+                            } else {
+                                Alert.alert('Info', 'Sharing not available');
+                            }
+                        }
+                    }
+                ]
+            );
+
+        } catch (error) {
+            console.error(error);
+            Alert.alert('Error', 'Export failed');
+        } finally {
+            setLoading(false);
+        }
+    };
+
     const renderItem = ({ item }) => {
         const color = getStatusColor(item.status, item.current_expiry_date);
         const statusText = getStatusText(item.status, item.current_expiry_date);
 
         return (
-            <TouchableOpacity onPress={() => handleMemberClick(item)}>
-                <View style={styles.card}>
-                    <View style={[styles.cardLeftBorder, { backgroundColor: color }]} />
+            <TouchableOpacity onPress={() => navigation.navigate('MemberDetail', { member: item })}>
+                <View style={[styles.card, { position: 'relative', overflow: 'hidden' }]}>
+                    {/* Status Pill in Top Right */}
+                    <View style={{
+                        position: 'absolute',
+                        top: 12,
+                        right: 12,
+                        backgroundColor: color,
+                        paddingHorizontal: 10,
+                        paddingVertical: 5,
+                        borderRadius: 12,
+                        zIndex: 1
+                    }}>
+                        <Text style={{ color: '#fff', fontSize: 10, fontWeight: 'bold' }}>{statusText}</Text>
+                    </View>
+
                     <View style={styles.cardContent}>
                         <View style={styles.row}>
                             <View style={styles.avatar}>
-                                {/* Placeholder Avatar - real app would use item.photo_url */}
                                 <Text style={styles.avatarText}>{item.name.charAt(0)}</Text>
                             </View>
-                            <View style={{ flex: 1 }}>
+                            <View style={{ flex: 1, paddingRight: 60 }}>
+                                <Text style={{ fontSize: 20, fontWeight: '900', color: theme.colors.primary, marginBottom: 4 }}>{item.member_code}</Text>
                                 <Text style={styles.memberName}>{item.name}</Text>
                                 <Text style={styles.memberMeta}>
-                                    Since {new Date(item.created_at).toLocaleDateString()} • {item.category || 'Umum'}
+                                    {item.category || 'Umum'} • Ends {new Date(item.current_expiry_date).toLocaleDateString()}
                                 </Text>
                             </View>
-                        </View>
-                    </View>
-                    <View style={styles.statusSection}>
-                        <View style={[styles.statusPill, { backgroundColor: color }]}>
-                            <Text style={styles.statusText}>{statusText}</Text>
                         </View>
                     </View>
                 </View>
@@ -143,77 +199,86 @@ export default function MembershipScreen() {
         <SafeAreaView style={styles.container}>
             <View style={styles.topHeader}>
                 <Text style={styles.pageTitle}>Membership</Text>
-                <TouchableOpacity style={styles.addButton} onPress={() => setModalVisible(true)}>
-                    <Plus size={24} color={theme.colors.background} />
-                </TouchableOpacity>
+                <View style={{ flexDirection: 'row', gap: 12 }}>
+                    <TouchableOpacity style={[styles.addButton, { backgroundColor: '#217346' }]} onPress={handleExport}>
+                        <FileSpreadsheet size={20} color="#fff" />
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.addButton} onPress={() => setModalVisible(true)}>
+                        <Plus size={24} color={theme.colors.background} />
+                    </TouchableOpacity>
+                </View>
             </View>
 
-            {loading ? (
-                <ActivityIndicator size="large" color={theme.colors.primary} style={{ marginTop: 20 }} />
-            ) : (
-                <FlatList
-                    data={filteredMembers}
-                    renderItem={renderItem}
-                    keyExtractor={item => item.id.toString()}
-                    contentContainerStyle={styles.listContent}
-                    ListHeaderComponent={
-                        <View>
-                            <View style={styles.searchSection}>
-                                <View style={styles.searchBar}>
-                                    <Search size={20} color={theme.colors.textSecondary} />
-                                    <TextInput
-                                        style={styles.input}
-                                        placeholder="Search members..."
-                                        placeholderTextColor={theme.colors.textSecondary}
-                                        value={searchQuery}
-                                        onChangeText={handleSearch}
+
+
+            {
+                loading ? (
+                    <MembershipSkeleton />
+                ) : (
+                    <FlatList
+                        data={filteredMembers}
+                        renderItem={renderItem}
+                        keyExtractor={item => item.id.toString()}
+                        contentContainerStyle={styles.listContent}
+                        ListHeaderComponent={
+                            <View>
+                                <View style={styles.searchSection}>
+                                    <View style={styles.searchBar}>
+                                        <Search size={20} color={theme.colors.textSecondary} />
+                                        <TextInput
+                                            style={styles.input}
+                                            placeholder="Search members..."
+                                            placeholderTextColor={theme.colors.textSecondary}
+                                            value={searchQuery}
+                                            onChangeText={handleSearch}
+                                        />
+                                    </View>
+                                </View>
+
+                                <View style={styles.filterSection}>
+                                    <FlatList
+                                        horizontal
+                                        showsHorizontalScrollIndicator={false}
+                                        data={['All', 'Mahasiswa', 'Umum', 'Couple', 'Expired']}
+                                        keyExtractor={i => i}
+                                        contentContainerStyle={{ paddingHorizontal: theme.spacing.l, gap: 12 }}
+                                        renderItem={({ item }) => (
+                                            <TouchableOpacity
+                                                style={[
+                                                    styles.chip,
+                                                    selectedCategory === item && styles.activeChip,
+                                                    item === 'Expired' && selectedCategory !== 'Expired' && { borderColor: theme.colors.danger }
+                                                ]}
+                                                onPress={() => handleCategorySelect(item)}
+                                            >
+                                                <Text style={[
+                                                    styles.chipText,
+                                                    selectedCategory === item && styles.activeChipText,
+                                                    item === 'Expired' && selectedCategory !== 'Expired' && { color: theme.colors.danger }
+                                                ]}>{item}</Text>
+                                            </TouchableOpacity>
+                                        )}
                                     />
                                 </View>
-                            </View>
 
-                            <View style={styles.filterSection}>
-                                <FlatList
-                                    horizontal
-                                    showsHorizontalScrollIndicator={false}
-                                    data={['All', 'Mahasiswa', 'Umum', 'Couple', 'Expired']}
-                                    keyExtractor={i => i}
-                                    contentContainerStyle={{ paddingHorizontal: theme.spacing.l, gap: 12 }}
-                                    renderItem={({ item }) => (
-                                        <TouchableOpacity
-                                            style={[
-                                                styles.chip,
-                                                selectedCategory === item && styles.activeChip,
-                                                item === 'Expired' && selectedCategory !== 'Expired' && { borderColor: theme.colors.danger }
-                                            ]}
-                                            onPress={() => handleCategorySelect(item)}
-                                        >
-                                            <Text style={[
-                                                styles.chipText,
-                                                selectedCategory === item && styles.activeChipText,
-                                                item === 'Expired' && selectedCategory !== 'Expired' && { color: theme.colors.danger }
-                                            ]}>{item}</Text>
-                                        </TouchableOpacity>
-                                    )}
-                                />
+                                <View style={styles.listHeader}>
+                                    <Text style={styles.sectionTitle}>MEMBERS ({filteredMembers.length})</Text>
+                                </View>
                             </View>
-
-                            <View style={styles.listHeader}>
-                                <Text style={styles.sectionTitle}>MEMBERS LIST ({filteredMembers.length})</Text>
+                        }
+                        refreshing={refreshing}
+                        onRefresh={() => {
+                            setRefreshing(true);
+                            fetchMembers();
+                        }}
+                        ListEmptyComponent={
+                            <View style={styles.emptyContainer}>
+                                <Text style={styles.emptyText}>No members found</Text>
                             </View>
-                        </View>
-                    }
-                    refreshing={refreshing}
-                    onRefresh={() => {
-                        setRefreshing(true);
-                        fetchMembers();
-                    }}
-                    ListEmptyComponent={
-                        <View style={styles.emptyContainer}>
-                            <Text style={styles.emptyText}>No members found</Text>
-                        </View>
-                    }
-                />
-            )}
+                        }
+                    />
+                )
+            }
 
             <AddMemberModal
                 visible={modalVisible}
@@ -224,16 +289,7 @@ export default function MembershipScreen() {
                 }}
             />
 
-            <MemberDetailModal
-                visible={detailModalVisible}
-                member={selectedMember}
-                onClose={() => setDetailModalVisible(false)}
-                onSuccess={() => {
-                    setRefreshing(true);
-                    fetchMembers();
-                }}
-            />
-        </SafeAreaView>
+        </SafeAreaView >
     );
 }
 

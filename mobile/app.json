@@ -15,11 +15,16 @@
       "supportsTablet": true
     },
     "android": {
+      "package": "com.kinggym.app",
+      "versionCode": 1,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": true
+      "edgeToEdgeEnabled": true,
+      "permissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -32,6 +37,11 @@
           "cameraPermission": "The app accesses your camera to let you take a photo for attendance."
         }
       ]
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "3d9e089c-0e65-4346-a728-b70bdfeb58c0"
+      }
+    }
   }
 }

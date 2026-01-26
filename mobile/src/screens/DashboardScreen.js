@@ -9,6 +9,7 @@ import { AuthContext } from '../context/AuthContext';
 import { ThemeContext } from '../context/ThemeContext';
 import { BarChart } from 'react-native-chart-kit';
 import IncomeSummary from '../components/IncomeSummary';
+import { DashboardSkeleton } from '../components/Skeleton'; // Import Skeleton
 
 const { width } = Dimensions.get('window');
 
@@ -61,17 +62,7 @@ export default function DashboardScreen({ navigation, route }) {
     const [insights, setInsights] = useState({ top: [], bottom: [] });
     const [insightFilter, setInsightFilter] = useState('month'); // day, week, month, all
     const [loadingInsights, setLoadingInsights] = useState(false);
-
-    useFocusEffect(
-        useCallback(() => {
-            fetchDashboardData();
-            fetchInsights();
-        }, [dateFilter]) // Re-fetch on filter change
-    );
-
-    useEffect(() => {
-        fetchInsights();
-    }, [insightFilter]);
+    const [topSalesToday, setTopSalesToday] = useState([]);
 
     const fetchDashboardData = async () => {
         try {
@@ -100,12 +91,22 @@ export default function DashboardScreen({ navigation, route }) {
                 }
             });
             setRecentTransactions(trxRes.data.data.slice(0, 3));
-
         } catch (error) {
             console.error('Dashboard Fetch Error:', error);
         } finally {
             setLoading(false);
             setRefreshing(false);
+        }
+    };
+
+    const fetchTopSalesToday = async () => {
+        try {
+            const response = await api.get('/dashboard/insights', {
+                params: { period: 'day' }
+            });
+            setTopSalesToday(response.data.top.slice(0, 3));
+        } catch (error) {
+            console.error('Top Sales Fetch Error:', error);
         }
     };
 
@@ -123,201 +124,166 @@ export default function DashboardScreen({ navigation, route }) {
         }
     };
 
-    const processChartData = () => {
-        let labels = [];
-        let data = [];
+    useFocusEffect(
+        useCallback(() => {
+            fetchDashboardData();
+            fetchInsights();
+            fetchTopSalesToday();
+        }, [dateFilter]) // Re-fetch on filter change
+    );
 
-        if (chartFilter === 'daily') {
-            // Show Mon-Sun
-            const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-            if (analytics.daily && analytics.daily.length > 0) {
-                labels = analytics.daily.map(d => {
-                    const date = new Date(d.date);
-                    return date.toLocaleDateString('en-US', { weekday: 'short' });
-                });
-                data = analytics.daily.map(d => parseInt(d.total));
-            } else {
-                labels = days;
-                data = [0, 0, 0, 0, 0, 0, 0];
-            }
-        } else if (chartFilter === 'weekly') {
-            if (analytics.weekly && analytics.weekly.length > 0) {
-                labels = analytics.weekly.map(w => w.week); // "Week 1", etc.
-                data = analytics.weekly.map(w => parseInt(w.total));
-            } else {
-                labels = ['W1', 'W2', 'W3', 'W4'];
-                data = [0, 0, 0, 0];
-            }
-        } else { // Yearly
-            if (analytics.yearly && analytics.yearly.length > 0) {
-                labels = analytics.yearly.map(m => m.month_name);
-                data = analytics.yearly.map(m => parseInt(m.total));
-            } else {
-                labels = ['Jan', 'Feb', 'Mar'];
-                data = [0, 0, 0];
-            }
-        }
+    useEffect(() => {
+        fetchInsights();
+    }, [insightFilter]);
 
-        return {
-            labels: labels,
-            datasets: [{ data: data }]
-        };
-    };
+    // ... (rest of code) ...
 
-    const renderTransactionItem = (item) => (
-        <View key={item.id} style={styles.trxCard}>
+    const renderTopSaleItem = (item, index) => (
+        <View key={index} style={styles.trxCard}>
             <View style={styles.trxLeft}>
-                <View style={[styles.iconBox, item.transaction_type === 'membership' ? styles.bgBlue : styles.bgOrange]}>
-                    <Text style={styles.iconText}>
-                        {item.transaction_type === 'membership' ? 'M' : (item.transaction_type === 'mix' ? 'X' : 'P')}
+                <View style={[styles.iconBox, { backgroundColor: theme.colors.primary + '20' }]}>
+                    <Text style={[styles.iconText, { color: theme.colors.primary }]}>
+                        {index + 1}
                     </Text>
                 </View>
                 <View>
-                    <Text style={styles.trxTitle}>{item.customer_name || 'Guest'}</Text>
+                    <Text style={styles.trxTitle}>{item.item_name}</Text>
                     <Text style={styles.trxSubtitle}>
-                        {new Date(item.created_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })} • {item.payment_method.toUpperCase()}
+                        Sold: {item.total_qty} {item.current_stock !== null ? `| Stock: ${item.current_stock}` : ''}
                     </Text>
                 </View>
             </View>
-            <View style={styles.trxRight}>
-                <Text style={styles.trxAmount}>+Rp {item.total_amount.toLocaleString('id-ID')}</Text>
-            </View>
+            {/* Removed Revenue as requested */}
         </View>
     );
 
-    const chartConfig = {
-        backgroundGradientFrom: theme.colors.card,
-        backgroundGradientTo: theme.colors.card,
-        color: (opacity = 1) => `rgba(255, 107, 107, ${opacity})`, // Primary color
-        labelColor: (opacity = 1) => theme.colors.textSecondary,
-        strokeWidth: 2,
-        barPercentage: 0.7,
-        decimalPlaces: 0,
-    };
-
     return (
         <SafeAreaView style={styles.container}>
-            <View style={styles.header}>
-                <View>
-                    <Text style={styles.greeting}>Dashboard</Text>
-                    <Text style={styles.subGreeting}>Welcome back, {userData?.name || 'Admin'}!</Text>
-                </View>
-                <TouchableOpacity style={styles.profileBtn} onPress={() => navigation.navigate('Profile')}>
-                    {userData?.photo_url ? (
-                        <Image source={{ uri: userData.photo_url }} style={{ width: 44, height: 44, borderRadius: 22 }} />
-                    ) : (
-                        <User size={24} color={theme.colors.text} />
-                    )}
-                </TouchableOpacity>
-            </View>
-
-            <ScrollView
-                contentContainerStyle={styles.content}
-                refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); fetchDashboardData(); }} />}
-            >
-                {/* Income Summary Component - Superadmin Only */}
-                {userData?.role === 'superadmin' && (
-                    <IncomeSummary
-                        data={{
-                            total: summary.total || summary.total_revenue || 0,
-                            membership: summary.membership || 0,
-                            product: summary.product || 0,
-                            membership_percentage: summary.membership_percentage || 0,
-                            product_percentage: summary.product_percentage || 0
-                        }}
-                        dateLabel={dateFilter.label}
-                        onFilterPress={() => navigation.navigate('DateFilter', {
-                            currentRange: dateFilter
-                        })}
-                    />
-                )}
-
-                {/* Revenue Chart Removed as requested - Replaced by IncomeSummary & Insights */}
-
-                {/* Insights Section */}
-                <View style={[styles.chartContainer, { marginBottom: 24 }]}>
-                    <View style={styles.chartHeader}>
-                        <Text style={styles.chartTitle}>Product Insights</Text>
-                        <View style={styles.filterContainer}>
-                            {['day', 'week', 'month', 'all'].map((f) => (
-                                <TouchableOpacity
-                                    key={f}
-                                    style={[styles.filterChip, insightFilter === f && styles.activeFilter]}
-                                    onPress={() => setInsightFilter(f)}
-                                >
-                                    <Text style={[styles.filterText, insightFilter === f && styles.activeFilterText]}>
-                                        {f.charAt(0).toUpperCase() + f.slice(1)}
-                                    </Text>
-                                </TouchableOpacity>
-                            ))}
+            {loading ? (
+                <DashboardSkeleton />
+            ) : (
+                <>
+                    {/* Header ... */}
+                    <View style={styles.header}>
+                        <View>
+                            <Text style={styles.greeting}>Dashboard</Text>
+                            <Text style={styles.subGreeting}>Welcome back, {userData?.name || 'Admin'}!</Text>
                         </View>
+                        <TouchableOpacity style={styles.profileBtn} onPress={() => navigation.navigate('Profile')}>
+                            {userData?.photo_url ? (
+                                <Image source={{ uri: userData.photo_url }} style={{ width: 44, height: 44, borderRadius: 22 }} />
+                            ) : (
+                                <User size={24} color={theme.colors.text} />
+                            )}
+                        </TouchableOpacity>
                     </View>
 
-                    {/* Top Selling */}
-                    <View style={{ marginBottom: 16 }}>
-                        <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8, gap: 8 }}>
-                            <Award size={16} color="#FFD700" />
-                            <Text style={styles.insightSectionTitle}>Top 3 Best Selling</Text>
-                        </View>
-                        {insights.top.length === 0 ? (
-                            <Text style={styles.emptyText}>No data available.</Text>
-                        ) : (
-                            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingRight: 16 }}>
-                                {insights.top.map((item, index) => (
-                                    <View key={index} style={[styles.insightCard, { borderColor: '#FFD700', backgroundColor: 'rgba(255, 215, 0, 0.1)' }]}>
-                                        <Text style={styles.insightRank}>#{index + 1}</Text>
-                                        <Text style={styles.insightName} numberOfLines={1}>{item.item_name}</Text>
-                                        <Text style={styles.insightValue}>{item.total_qty} Sold</Text>
-                                        {userData?.role === 'superadmin' && (
-                                            <Text style={styles.insightSubValue}>Rp {parseInt(item.total_revenue).toLocaleString('id-ID')}</Text>
-                                        )}
-                                    </View>
-                                ))}
-                            </ScrollView>
+                    <ScrollView
+                        contentContainerStyle={styles.content}
+                        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); fetchDashboardData(); fetchInsights(); fetchTopSalesToday(); }} />}
+                    >
+                        {/* Income Summary (Superadmin) */}
+                        {userData?.role === 'superadmin' && (
+                            <IncomeSummary
+                                data={{
+                                    total: summary.total || summary.total_revenue || 0,
+                                    membership: summary.membership || 0,
+                                    product: summary.product || 0,
+                                    membership_percentage: summary.membership_percentage || 0,
+                                    product_percentage: summary.product_percentage || 0
+                                }}
+                                dateLabel={dateFilter.label}
+                                onFilterPress={() => navigation.navigate('DateFilter', {
+                                    currentRange: dateFilter
+                                })}
+                            />
                         )}
-                    </View>
 
-
-                    {/* Least Selling */}
-                    <View>
-                        <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8, gap: 8 }}>
-                            <AlertCircle size={16} color={theme.colors.textSecondary} />
-                            <Text style={styles.insightSectionTitle}>Least Selling</Text>
+                        {/* TODAY'S TOP SALES (Replaces Recent Transactions) */}
+                        <View style={styles.sectionHeader}>
+                            <Text style={styles.sectionTitle}>TODAY'S TOP SALES</Text>
+                            <TouchableOpacity onPress={() => navigation.navigate('TopSales')}>
+                                <Text style={styles.seeAllText}>See All</Text>
+                            </TouchableOpacity>
                         </View>
-                        {insights.bottom.length === 0 ? (
-                            <Text style={styles.emptyText}>No data available.</Text>
+
+                        {topSalesToday.length === 0 ? (
+                            <Text style={styles.emptyText}>No sales yet today.</Text>
                         ) : (
-                            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingRight: 16 }}>
-                                {insights.bottom.map((item, index) => (
-                                    <View key={index} style={[styles.insightCard, { borderColor: theme.colors.border, backgroundColor: theme.colors.card }]}>
-                                        <Text style={[styles.insightRank, { color: theme.colors.textSecondary }]}>↓</Text>
-                                        <Text style={styles.insightName} numberOfLines={1}>{item.item_name}</Text>
-                                        <Text style={styles.insightValue}>{item.total_qty} Sold</Text>
-                                        {userData?.role === 'superadmin' && (
-                                            <Text style={styles.insightSubValue}>Rp {parseInt(item.total_revenue).toLocaleString('id-ID')}</Text>
-                                        )}
-                                    </View>
-                                ))}
-                            </ScrollView>
+                            topSalesToday.map((item, index) => renderTopSaleItem(item, index))
                         )}
-                    </View>
-                </View>
 
-                {/* Recent Transactions */}
-                <View style={styles.sectionHeader}>
-                    <Text style={styles.sectionTitle}>RECENT TRANSACTIONS (Today)</Text>
-                    <TouchableOpacity onPress={() => navigation.navigate('Rekap')}>
-                        <Text style={styles.seeAllText}>See All</Text>
-                    </TouchableOpacity>
-                </View>
+                        {/* Insights Section (Product Insights - Charts/Stats) */}
+                        <View style={[styles.chartContainer, { marginTop: 24, marginBottom: 24 }]}>
+                            <View style={styles.chartHeader}>
+                                <Text style={styles.chartTitle}>Stats Insights</Text>
+                                <View style={styles.filterContainer}>
+                                    {['day', 'week', 'month', 'all'].map((f) => (
+                                        <TouchableOpacity
+                                            key={f}
+                                            style={[styles.filterChip, insightFilter === f && styles.activeFilter]}
+                                            onPress={() => setInsightFilter(f)}
+                                        >
+                                            <Text style={[styles.filterText, insightFilter === f && styles.activeFilterText]}>
+                                                {f.charAt(0).toUpperCase() + f.slice(1)}
+                                            </Text>
+                                        </TouchableOpacity>
+                                    ))}
+                                </View>
+                            </View>
 
-                {recentTransactions.length === 0 ? (
-                    <Text style={styles.emptyText}>No transactions today.</Text>
-                ) : (
-                    recentTransactions.map(item => renderTransactionItem(item))
-                )}
+                            {/* Top Selling Stats */}
+                            <View style={{ marginBottom: 16 }}>
+                                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8, gap: 8 }}>
+                                    <Award size={16} color="#FFD700" />
+                                    <Text style={styles.insightSectionTitle}>Best Selling (Rank)</Text>
+                                </View>
+                                {insights.top.length === 0 ? (
+                                    <Text style={styles.emptyText}>No data available.</Text>
+                                ) : (
+                                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingRight: 16 }}>
+                                        {insights.top.map((item, index) => (
+                                            <View key={index} style={[styles.insightCard, { borderColor: '#FFD700', backgroundColor: 'rgba(255, 215, 0, 0.1)' }]}>
+                                                <Text style={styles.insightRank}>#{index + 1}</Text>
+                                                <Text style={styles.insightName} numberOfLines={1}>{item.item_name}</Text>
+                                                <Text style={styles.insightValue}>{item.total_qty} Sold</Text>
+                                                {userData?.role === 'superadmin' && (
+                                                    <Text style={styles.insightSubValue}>Rp {parseInt(item.total_revenue).toLocaleString('id-ID')}</Text>
+                                                )}
+                                            </View>
+                                        ))}
+                                    </ScrollView>
+                                )}
+                            </View>
 
-            </ScrollView>
+                            {/* Least Selling Stats */}
+                            <View>
+                                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8, gap: 8 }}>
+                                    <AlertCircle size={16} color={theme.colors.textSecondary} />
+                                    <Text style={styles.insightSectionTitle}>Least Selling</Text>
+                                </View>
+                                {insights.bottom.length === 0 ? (
+                                    <Text style={styles.emptyText}>No data available.</Text>
+                                ) : (
+                                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingRight: 16 }}>
+                                        {insights.bottom.map((item, index) => (
+                                            <View key={index} style={[styles.insightCard, { borderColor: theme.colors.border, backgroundColor: theme.colors.card }]}>
+                                                <Text style={[styles.insightRank, { color: theme.colors.textSecondary }]}>↓</Text>
+                                                <Text style={styles.insightName} numberOfLines={1}>{item.item_name}</Text>
+                                                <Text style={styles.insightValue}>{item.total_qty} Sold</Text>
+                                                {userData?.role === 'superadmin' && (
+                                                    <Text style={styles.insightSubValue}>Rp {parseInt(item.total_revenue).toLocaleString('id-ID')}</Text>
+                                                )}
+                                            </View>
+                                        ))}
+                                    </ScrollView>
+                                )}
+                            </View>
+                        </View>
+
+                    </ScrollView>
+                </>
+            )}
         </SafeAreaView>
     );
 }
@@ -355,37 +321,6 @@ const createStyles = (theme) => StyleSheet.create({
     },
     content: {
         paddingBottom: 20
-    },
-    statsRow: {
-        flexDirection: 'row',
-        gap: 12,
-        paddingHorizontal: theme.spacing.l,
-        marginBottom: 24
-    },
-    statCard: {
-        flex: 1,
-        borderRadius: 16,
-        padding: 16,
-        borderWidth: 1,
-        borderColor: theme.colors.border
-    },
-    statIcon: {
-        width: 40,
-        height: 40,
-        borderRadius: 20,
-        justifyContent: 'center',
-        alignItems: 'center',
-        marginBottom: 12
-    },
-    statLabel: {
-        color: theme.colors.textSecondary,
-        fontSize: 12,
-        marginBottom: 4
-    },
-    statValue: {
-        color: theme.colors.text,
-        fontSize: 16,
-        fontWeight: 'bold'
     },
     chartContainer: {
         marginHorizontal: theme.spacing.l,
@@ -464,26 +399,26 @@ const createStyles = (theme) => StyleSheet.create({
         gap: 12
     },
     iconBox: {
-        width: 40,
-        height: 40,
-        borderRadius: 20,
+        width: 32,
+        height: 32,
+        borderRadius: 16,
         justifyContent: 'center',
         alignItems: 'center',
     },
-    bgBlue: { backgroundColor: 'rgba(33, 150, 243, 0.2)' },
-    bgOrange: { backgroundColor: 'rgba(255, 152, 0, 0.2)' },
     iconText: {
         fontWeight: 'bold',
-        color: theme.colors.text
+        fontSize: 14
     },
     trxTitle: {
         color: theme.colors.text,
         fontWeight: 'bold',
-        fontSize: 14
+        fontSize: 14,
+        maxWidth: 180
     },
     trxSubtitle: {
         color: theme.colors.textSecondary,
-        fontSize: 12
+        fontSize: 12,
+        marginTop: 2
     },
     trxRight: {
         alignItems: 'flex-end'

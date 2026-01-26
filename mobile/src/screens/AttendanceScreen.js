@@ -1,16 +1,25 @@
 import React, { useEffect, useState, useContext, useMemo, useRef } from 'react';
-import { StyleSheet, Text, View, TouchableOpacity, Alert, FlatList, ActivityIndicator, Modal, Image, Dimensions } from 'react-native';
+import { StyleSheet, Text, View, TouchableOpacity, Alert, FlatList, ActivityIndicator, Modal, Image, Dimensions, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import api from '../config/api';
-import { MapPin, Camera, Clock, X, RotateCcw, ChevronLeft, ChevronRight, Calendar } from 'lucide-react-native';
+// Add BASE_URL from api config or env if needed, usually api base url is enough but for download we might need full url
+// Assuming api.defaults.baseURL is available or we reconstruct it.
+// Actually, better to use the same logic as MembershipScreen export.
+import { MapPin, Camera, Clock, X, RotateCcw, ChevronLeft, ChevronRight, Calendar, FileText } from 'lucide-react-native';
 import { AuthContext } from '../context/AuthContext';
 import { ThemeContext } from '../context/ThemeContext';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Location from 'expo-location';
 import * as ImageManipulator from 'expo-image-manipulator';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import * as FileSystem from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const { width, height } = Dimensions.get('window');
+// Helper to get Base URL from api instance
+const BASE_URL = api.defaults.baseURL;
+
+const { width } = Dimensions.get('window');
 
 export default function AttendanceScreen({ navigation }) {
     const { theme } = useContext(ThemeContext);
@@ -75,6 +84,8 @@ export default function AttendanceScreen({ navigation }) {
         }
     };
 
+
+
     const handleActionPress = async (type) => {
         setActionType(type);
         setCapturedImage(null);
@@ -94,9 +105,7 @@ export default function AttendanceScreen({ navigation }) {
         try {
             const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
             setLocation(loc.coords);
-            setShowCamera(true); // Open Camera after location found (or parallel?)
-            // Parallel is better for UX, but let's ensure location first to avoid cheating? 
-            // Actually, open camera while getting location is faster feeling.
+            setShowCamera(true);
         } catch (e) {
             Alert.alert('Location Error', 'Failed to get current location.');
         } finally {
@@ -108,15 +117,11 @@ export default function AttendanceScreen({ navigation }) {
         if (cameraRef.current) {
             try {
                 const photo = await cameraRef.current.takePictureAsync({ quality: 0.5 });
-
-                // Manipulate: Resize and Flip (Selfie usually needs flip?) - Expo CameraView might handle flip visually, but image might be mirrored.
-                // Let's just resize for now to save bandwidth.
                 const manipulated = await ImageManipulator.manipulateAsync(
                     photo.uri,
                     [{ resize: { width: 600 } }],
                     { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG }
                 );
-
                 setCapturedImage(manipulated);
                 setShowCamera(false);
             } catch (error) {
@@ -137,7 +142,6 @@ export default function AttendanceScreen({ navigation }) {
             formData.append('latitude', location.latitude.toString());
             formData.append('longitude', location.longitude.toString());
 
-            // Append File
             const filename = capturedImage.uri.split('/').pop();
             const match = /\.(\w+)$/.exec(filename);
             const type = match ? `image/${match[1]}` : `image/jpeg`;
@@ -187,7 +191,6 @@ export default function AttendanceScreen({ navigation }) {
                 </View>
             </View>
 
-            {/* Added: Account Indicator (Small Text) */}
             <Text style={{ fontSize: 12, color: theme.colors.primary, marginBottom: 8, fontWeight: 'bold' }}>
                 {item.user?.name || userData?.name || 'User'}
             </Text>
@@ -230,18 +233,14 @@ export default function AttendanceScreen({ navigation }) {
         );
     }
 
-    // Fix: CameraView children warning -> Use Absolute Overlay
     if (showCamera) {
         return (
             <View style={{ flex: 1, backgroundColor: 'black' }}>
                 <CameraView style={StyleSheet.absoluteFill} facing="front" ref={cameraRef} />
-
-                {/* Overlay now outside CameraView */}
                 <View style={styles.cameraOverlay}>
                     <TouchableOpacity style={styles.closeCamera} onPress={() => setShowCamera(false)}>
                         <X size={32} color="#FFF" />
                     </TouchableOpacity>
-
                     <TouchableOpacity style={styles.captureBtn} onPress={takePicture}>
                         <View style={styles.captureInner} />
                     </TouchableOpacity>
@@ -252,9 +251,18 @@ export default function AttendanceScreen({ navigation }) {
 
     return (
         <SafeAreaView style={styles.container}>
-            <View style={styles.header}>
-                <Text style={styles.title}>Attendance</Text>
-                <Text style={styles.subtitle}>Welcome, {userData?.name || 'Staff'}</Text>
+            <View style={[styles.header, { flexDirection: 'row', justifyContent: 'space-between' }]}>
+                <View>
+                    <Text style={styles.title}>Attendance</Text>
+                    <Text style={styles.subtitle}>Welcome, {userData?.name || 'Staff'}</Text>
+                </View>
+                {/* Recap Btn (Superadmin Only) */}
+                {userData?.role === 'superadmin' && (
+                    <TouchableOpacity style={styles.recapBtn} onPress={() => navigation.navigate('ShiftRecap')}>
+                        <FileText size={24} color={theme.colors.primary} />
+                        <Text style={{ fontSize: 10, color: theme.colors.primary, fontWeight: 'bold' }}>Rekap Shift</Text>
+                    </TouchableOpacity>
+                )}
             </View>
 
             {/* Action Buttons */}
@@ -326,6 +334,8 @@ export default function AttendanceScreen({ navigation }) {
                     }
                 />
             )}
+
+
         </SafeAreaView>
     );
 }
@@ -450,7 +460,7 @@ const createStyles = (theme) => StyleSheet.create({
     },
     // Updated overlay for Absolute Positioning
     cameraOverlay: {
-        ...StyleSheet.absoluteFillObject, // Covers entire screen over camera
+        ...StyleSheet.absoluteFillObject,
         backgroundColor: 'transparent',
         flexDirection: 'row',
         justifyContent: 'center',
@@ -533,9 +543,52 @@ const createStyles = (theme) => StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
     },
-    dateText: {
-        color: theme.colors.text,
+    // Modal Styles
+    recapBtn: {
+        alignItems: 'center',
+        marginTop: 4
+    },
+    modalOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0,0,0,0.5)',
+        justifyContent: 'center',
+        padding: 20
+    },
+    modalContent: {
+        borderRadius: 16,
+        padding: 20,
+        elevation: 5
+    },
+    modalTitle: {
+        fontSize: 18,
+        fontWeight: 'bold'
+    },
+    pickerBtn: {
+        padding: 8,
+        borderWidth: 1,
+        borderColor: '#ccc', // Use theme logic ideally
+        borderRadius: 8
+    },
+    monthDisplay: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: '#ccc',
+        borderRadius: 8
+    },
+    exportBtn: {
+        backgroundColor: '#4CAF50', // Success green or primary
+        flexDirection: 'row',
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 16,
+        borderRadius: 12,
+        gap: 10
+    },
+    exportBtnText: {
+        color: 'white',
         fontWeight: 'bold',
-        fontSize: 14
+        fontSize: 16
     }
 });

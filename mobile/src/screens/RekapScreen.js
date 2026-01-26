@@ -1,5 +1,5 @@
 import React, { useCallback, useState, useContext, useMemo } from 'react';
-import { StyleSheet, Text, View, ScrollView, RefreshControl, TouchableOpacity, FlatList, Modal, Alert } from 'react-native';
+import { StyleSheet, Text, View, ScrollView, RefreshControl, TouchableOpacity, FlatList, Modal, Alert, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 // import { theme } from '../config/theme';
 import api from '../config/api';
@@ -13,7 +13,7 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import { ThemeContext } from '../context/ThemeContext';
 import { AuthContext } from '../context/AuthContext';
 
-export default function RekapScreen() {
+export default function RekapScreen({ navigation }) {
     const { userData } = useContext(AuthContext);
     const { theme } = useContext(ThemeContext);
     const styles = useMemo(() => createStyles(theme), [theme]);
@@ -31,12 +31,25 @@ export default function RekapScreen() {
     };
 
     const [transactions, setTransactions] = useState([]);
+    const [expenses, setExpenses] = useState([]); // Expense State
+    const [activeTab, setActiveTab] = useState('income'); // 'income' or 'expense'
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
 
     // Detail Modal
     const [selectedTransaction, setSelectedTransaction] = useState(null);
     const [modalVisible, setModalVisible] = useState(false);
+
+    // Add Expense Modal
+    const [expenseModalVisible, setExpenseModalVisible] = useState(false);
+    const [newExpense, setNewExpense] = useState({ amount: '', description: '' });
+    const [expenseDate, setExpenseDate] = useState(new Date());
+    const [showExpenseDatePicker, setShowExpenseDatePicker] = useState(false);
+
+    const onExpenseDateChange = (event, selectedDate) => {
+        setShowExpenseDatePicker(false);
+        if (selectedDate) setExpenseDate(selectedDate);
+    };
 
     // Fix: Use local date formatting to prevent UTC shift (which causes previous day selection)
     const formattedDate = useMemo(() => {
@@ -56,12 +69,19 @@ export default function RekapScreen() {
     const fetchDashboardData = async () => {
         try {
             setLoading(true);
+
+            // Fetch Transactions
             const response = await api.get('/transactions', {
                 params: { date: formattedDate }
             });
-
             setTransactions(response.data.data);
             setStats(response.data.summary);
+
+            // Fetch Expenses
+            const expenseRes = await api.get('/expenses', {
+                params: { date: formattedDate }
+            });
+            setExpenses(expenseRes.data.data);
 
         } catch (error) {
             console.error('Rekap Fetch Error:', error);
@@ -69,6 +89,45 @@ export default function RekapScreen() {
             setLoading(false);
             setRefreshing(false);
         }
+    };
+
+    const handleAddExpense = async () => {
+        if (!newExpense.amount || !newExpense.description) {
+            Alert.alert('Error', 'Please fill all fields');
+            return;
+        }
+
+        try {
+            setLoading(true);
+            await api.post('/expenses', {
+                amount: newExpense.amount,
+                description: newExpense.description,
+                date: expenseDate.toISOString().split('T')[0] // Use specific expense date
+            });
+            setExpenseModalVisible(false);
+            setNewExpense({ amount: '', description: '' });
+            setExpenseDate(new Date()); // Reset date
+            fetchDashboardData();
+            Alert.alert('Success', 'Expense added');
+        } catch (error) {
+            Alert.alert('Error', 'Failed to add expense');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleDeleteExpense = async (id) => {
+        Alert.alert('Delete', 'Delete this expense?', [
+            { text: 'Cancel' },
+            {
+                text: 'Delete', style: 'destructive', onPress: async () => {
+                    try {
+                        await api.delete(`/expenses/${id}`);
+                        fetchDashboardData();
+                    } catch (e) { Alert.alert('Error', 'Failed to delete'); }
+                }
+            }
+        ]);
     };
 
     const changeDate = (days) => {
@@ -92,27 +151,6 @@ export default function RekapScreen() {
             }
 
             const fileUri = FileSystem.documentDirectory + `laporan-${formattedDate}.xlsx`;
-
-            // Use local IP for emulator or configured baseURL
-            // Assuming api.defaults.baseURL is set, but FileSystem needs absolute URL
-            // We'll extract baseURL from api config or hardcode/detect? 
-            // Better to pull from api.js if exported, but api.js is an axios instance.
-            // Let's assume we use the same base URL logic or just hardcode for this fix if needed.
-            // Wait, api.js might not expose the URL string directly.
-            // Let's check api.js content first or just use a relative path if supported? No, FS needs absolute.
-            // I'll assume the same host as previous requests: http://127.0.0.1:8000/api
-            // Ideally, read from a config file.
-
-            // Temporary: I will parse it from the api instance or Config.
-            // Actually, let's look at api.js again.
-            // For now, I'll use a direct string but I should check api.js first.
-
-            // RE-READING API.JS TO BE SAFE BEFORE WRITING
-            // I'll do a quick view_file on api.js in the next step to get the base URL.
-            // BUT since I am in a write tool, I will use a placeholder or safe default and then fix if needed.
-            // Actually I'll use the "api" object to get the baseURL if possible, 
-            // or just use the same hardcoded one commonly used: 'http://127.0.0.1:8000/api' or checking what the user used.
-            // The user used 'http://127.0.0.1:8000/api' in previous logs.
 
             const downloadRes = await FileSystem.downloadAsync(
                 `${BASE_URL}/export/excel`,
@@ -174,15 +212,31 @@ export default function RekapScreen() {
         <SafeAreaView style={styles.container}>
             <View style={styles.header}>
                 <View>
-                    <Text style={styles.greeting}>Rekap Penjualan</Text>
+                    <Text style={styles.greeting}>Rekap Keuangan</Text>
                     <Text style={styles.subGreeting}>Daily Report</Text>
                 </View>
 
-                {userData?.role === 'superadmin' && (
-                    <TouchableOpacity style={styles.exportBtn} onPress={handleExport}>
+                {userData?.role === 'superadmin' && activeTab === 'income' && (
+                    <TouchableOpacity style={styles.exportBtn} onPress={() => navigation.navigate('ReportExport')}>
                         <FileSpreadsheet size={20} color={theme.colors.background} />
                     </TouchableOpacity>
                 )}
+            </View>
+
+            {/* Toggle Switch */}
+            <View style={{ flexDirection: 'row', marginHorizontal: 20, marginBottom: 16, backgroundColor: theme.colors.card, borderRadius: 12, padding: 4, borderWidth: 1, borderColor: theme.colors.border }}>
+                <TouchableOpacity
+                    style={{ flex: 1, paddingVertical: 8, alignItems: 'center', borderRadius: 8, backgroundColor: activeTab === 'income' ? theme.colors.primary : 'transparent' }}
+                    onPress={() => setActiveTab('income')}
+                >
+                    <Text style={{ fontWeight: 'bold', color: activeTab === 'income' ? '#fff' : theme.colors.textSecondary }}>Pemasukan</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                    style={{ flex: 1, paddingVertical: 8, alignItems: 'center', borderRadius: 8, backgroundColor: activeTab === 'expense' ? theme.colors.danger : 'transparent' }}
+                    onPress={() => setActiveTab('expense')}
+                >
+                    <Text style={{ fontWeight: 'bold', color: activeTab === 'expense' ? '#fff' : theme.colors.textSecondary }}>Pengeluaran</Text>
+                </TouchableOpacity>
             </View>
 
             <View style={styles.dateNavContainer}>
@@ -218,45 +272,144 @@ export default function RekapScreen() {
                 contentContainerStyle={styles.content}
                 refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); fetchDashboardData(); }} />}
             >
-                {/* Stats Cards */}
-                <View style={styles.statsRow}>
-                    {userData?.role === 'superadmin' && (
-                        <View style={[styles.statCard, { backgroundColor: theme.colors.card }]}>
-                            <View style={[styles.statIcon, { backgroundColor: 'rgba(76, 175, 80, 0.1)' }]}>
-                                <TrendingUp size={24} color={theme.colors.success} />
+                {activeTab === 'income' ? (
+                    <>
+                        {/* Stats Cards */}
+                        <View style={styles.statsRow}>
+                            {userData?.role === 'superadmin' && (
+                                <View style={[styles.statCard, { backgroundColor: theme.colors.card }]}>
+                                    <View style={[styles.statIcon, { backgroundColor: 'rgba(76, 175, 80, 0.1)' }]}>
+                                        <TrendingUp size={24} color={theme.colors.success} />
+                                    </View>
+                                    <Text style={styles.statLabel}>Total Income</Text>
+                                    <Text style={styles.statValue}>Rp {stats.total_income.toLocaleString('id-ID')}</Text>
+                                </View>
+                            )}
+                            <View style={[styles.statCard, { backgroundColor: theme.colors.card }]}>
+                                <View style={[styles.statIcon, { backgroundColor: 'rgba(33, 150, 243, 0.1)' }]}>
+                                    <Users size={24} color="#2196F3" />
+                                </View>
+                                <Text style={styles.statLabel}>Transactions</Text>
+                                <Text style={styles.statValue}>{stats.count}</Text>
                             </View>
-                            <Text style={styles.statLabel}>Total Income</Text>
-                            <Text style={styles.statValue}>Rp {stats.total_income.toLocaleString('id-ID')}</Text>
                         </View>
-                    )}
-                    <View style={[styles.statCard, { backgroundColor: theme.colors.card }]}>
-                        <View style={[styles.statIcon, { backgroundColor: 'rgba(33, 150, 243, 0.1)' }]}>
-                            <Users size={24} color="#2196F3" />
+
+                        {/* Transaction List */}
+                        <View style={styles.sectionHeader}>
+                            <Text style={styles.sectionTitle}>TRANSACTIONS</Text>
                         </View>
-                        <Text style={styles.statLabel}>Transactions</Text>
-                        <Text style={styles.statValue}>{stats.count}</Text>
-                    </View>
-                </View>
 
-                {/* Transaction List */}
-                <View style={styles.sectionHeader}>
-                    <Text style={styles.sectionTitle}>TRANSACTIONS</Text>
-                </View>
-
-                {transactions.length === 0 ? (
-                    <View style={styles.emptyState}>
-                        <Text style={styles.emptyText}>No transactions for this date.</Text>
-                    </View>
+                        {transactions.length === 0 ? (
+                            <View style={styles.emptyState}>
+                                <Text style={styles.emptyText}>No transactions for this date.</Text>
+                            </View>
+                        ) : (
+                            <View style={styles.listContainer}>
+                                {transactions.map(item => (
+                                    <View key={item.id}>
+                                        {renderTransactionItem({ item })}
+                                    </View>
+                                ))}
+                            </View>
+                        )}
+                    </>
                 ) : (
-                    <View style={styles.listContainer}>
-                        {transactions.map(item => (
-                            <View key={item.id}>
-                                {renderTransactionItem({ item })}
+                    <>
+                        {/* Expense List */}
+                        <View style={styles.sectionHeader}>
+                            <Text style={styles.sectionTitle}>EXPENSES LIST</Text>
+                        </View>
+
+                        {expenses.length === 0 ? (
+                            <View style={styles.emptyState}>
+                                <Text style={styles.emptyText}>No expenses recorded.</Text>
                             </View>
-                        ))}
-                    </View>
+                        ) : (
+                            <View style={styles.listContainer}>
+                                {expenses.map(item => (
+                                    <TouchableOpacity key={item.id} onLongPress={() => handleDeleteExpense(item.id)} style={styles.trxCard}>
+                                        <View style={styles.trxLeft}>
+                                            <View style={[styles.iconBox, { backgroundColor: 'rgba(244, 67, 54, 0.1)' }]}>
+                                                <Text style={[styles.iconText, { color: theme.colors.danger }]}>E</Text>
+                                            </View>
+                                            <View>
+                                                <Text style={styles.trxTitle}>{item.description}</Text>
+                                                <Text style={styles.trxSubtitle}>{item.user?.name || 'Staff'}</Text>
+                                            </View>
+                                        </View>
+                                        <View style={styles.trxRight}>
+                                            <Text style={[styles.trxAmount, { color: theme.colors.danger }]}>-Rp {parseFloat(item.amount).toLocaleString('id-ID')}</Text>
+                                        </View>
+                                    </TouchableOpacity>
+                                ))}
+                            </View>
+                        )}
+
+                        {/* Add Expense Button */}
+                        <TouchableOpacity
+                            style={{ margin: 20, backgroundColor: theme.colors.danger, padding: 16, borderRadius: 12, alignItems: 'center' }}
+                            onPress={() => setExpenseModalVisible(true)}
+                        >
+                            <Text style={{ color: '#fff', fontWeight: 'bold' }}>+ Add Expense</Text>
+                        </TouchableOpacity>
+                    </>
                 )}
             </ScrollView>
+
+            <Modal visible={expenseModalVisible} transparent animationType="fade">
+                <TouchableOpacity activeOpacity={1} style={styles.modalOverlay} onPress={() => {
+                    setExpenseModalVisible(false);
+                }}>
+                    <TouchableOpacity activeOpacity={1} style={styles.modalContent} onPress={() => { }}>
+                        {/* Stop propagation */}
+                        <Text style={styles.modalTitle}>Add Expense</Text>
+                        <TextInput
+                            placeholder="Amount (Rp)"
+                            keyboardType="numeric"
+                            style={{ borderWidth: 1, borderColor: '#ccc', borderRadius: 8, padding: 12, marginBottom: 12, backgroundColor: theme.colors.background, color: theme.colors.text }}
+                            placeholderTextColor={theme.colors.textSecondary}
+                            value={newExpense.amount}
+                            onChangeText={t => setNewExpense({ ...newExpense, amount: t })}
+                        />
+                        <TextInput
+                            placeholder="Description (e.g., Listrik)"
+                            style={{ borderWidth: 1, borderColor: '#ccc', borderRadius: 8, padding: 12, marginBottom: 12, backgroundColor: theme.colors.background, color: theme.colors.text }}
+                            placeholderTextColor={theme.colors.textSecondary}
+                            value={newExpense.description}
+                            onChangeText={t => setNewExpense({ ...newExpense, description: t })}
+                        />
+
+                        <Text style={{ fontSize: 12, color: theme.colors.textSecondary, marginBottom: 8 }}>Date</Text>
+                        <TouchableOpacity
+                            style={{ flexDirection: 'row', alignItems: 'center', gap: 10, borderWidth: 1, borderColor: '#ccc', borderRadius: 8, padding: 12, marginBottom: 20, backgroundColor: theme.colors.background }}
+                            onPress={() => setShowExpenseDatePicker(true)}
+                        >
+                            <Calendar size={20} color={theme.colors.textSecondary} />
+                            <Text style={{ color: theme.colors.text }}>
+                                {expenseDate.toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}
+                            </Text>
+                        </TouchableOpacity>
+
+                        {showExpenseDatePicker && (
+                            <DateTimePicker
+                                value={expenseDate}
+                                mode="date"
+                                display="default"
+                                onChange={onExpenseDateChange}
+                            />
+                        )}
+
+                        <View style={{ flexDirection: 'row', gap: 12 }}>
+                            <TouchableOpacity style={{ flex: 1, padding: 12, borderWidth: 1, borderColor: '#ccc', borderRadius: 8, alignItems: 'center' }} onPress={() => setExpenseModalVisible(false)}>
+                                <Text style={{ color: theme.colors.text }}>Cancel</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity style={{ flex: 1, padding: 12, backgroundColor: theme.colors.danger, borderRadius: 8, alignItems: 'center' }} onPress={handleAddExpense}>
+                                <Text style={{ color: '#fff', fontWeight: 'bold' }}>Save</Text>
+                            </TouchableOpacity>
+                        </View>
+                    </TouchableOpacity>
+                </TouchableOpacity>
+            </Modal>
 
             {/* Detail Modal */}
             <Modal visible={modalVisible} animationType="slide" transparent={true} supportedOrientations={['portrait', 'landscape']}>
@@ -513,8 +666,9 @@ const createStyles = (theme) => StyleSheet.create({
         backgroundColor: theme.colors.card,
         borderTopLeftRadius: 24,
         borderTopRightRadius: 24,
-        maxHeight: '80%',
-        padding: 24,
+        height: '70%', // Force taller height
+        padding: 30, // More padding
+        width: '100%'
     },
     modalHeader: {
         flexDirection: 'row',
