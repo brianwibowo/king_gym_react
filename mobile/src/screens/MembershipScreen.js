@@ -54,15 +54,37 @@ export default function MembershipScreen({ navigation }) {
 
         // Filter by Category
         if (category !== 'All') {
-            if (category === 'Expired') {
+            if (category === 'Active') {
+                // Filter: Status is active
+                result = result.filter(member => member.status === 'active');
+            } else if (category === 'Pending') {
+                result = result.filter(member => member.status === 'pending');
+            } else if (category === 'Expired') {
                 const now = new Date();
                 result = result.filter(member => {
                     if (member.status !== 'active') return true;
+                    // Check expiry date
                     const expiry = new Date(member.current_expiry_date);
                     return expiry < now;
                 });
-            } else {
-                result = result.filter(member => member.category === category);
+            } else if (category === 'Mahasiswa') {
+                // Filter: Ends with 'M'
+                result = result.filter(member => {
+                    const code = member.member_code.trim().toUpperCase();
+                    return code.endsWith('M');
+                });
+            } else if (category === 'Umum') {
+                // Filter: Ends with 'U'
+                result = result.filter(member => {
+                    const code = member.member_code.trim().toUpperCase();
+                    return code.endsWith('U');
+                });
+            } else if (category === 'Couple') {
+                // Filter: Ends with 'C'
+                result = result.filter(member => {
+                    const code = member.member_code.trim().toUpperCase();
+                    return code.endsWith('C');
+                });
             }
         }
 
@@ -80,6 +102,7 @@ export default function MembershipScreen({ navigation }) {
     };
 
     const getStatusColor = (status, expiryDate) => {
+        if (status === 'pending') return '#FF9800'; // Orange for Pending
         if (status !== 'active') return theme.colors.danger;
 
         const now = new Date();
@@ -93,6 +116,7 @@ export default function MembershipScreen({ navigation }) {
     };
 
     const getStatusText = (status, expiryDate) => {
+        if (status === 'pending') return 'PENDING';
         if (status !== 'active') return 'EXPIRED';
         const now = new Date();
         const expiry = new Date(expiryDate);
@@ -116,13 +140,16 @@ export default function MembershipScreen({ navigation }) {
             // Change extension to .xlsx
             const fileUri = FileSystem.documentDirectory + `members-${new Date().toISOString().split('T')[0]}.xlsx`;
 
-            const downloadRes = await FileSystem.downloadAsync(
-                `${BASE_URL}/members/export`,
+            // Use createDownloadResumable to avoid deprecation issues
+            const downloadResumable = FileSystem.createDownloadResumable(
+                `${BASE_URL}/export/members`,
                 fileUri,
                 {
                     headers: { 'Authorization': `Bearer ${userToken}` }
                 }
             );
+
+            const downloadRes = await downloadResumable.downloadAsync();
 
             if (downloadRes.status !== 200) {
                 Alert.alert('Error', 'Failed to download file');
@@ -155,12 +182,12 @@ export default function MembershipScreen({ navigation }) {
         }
     };
 
-    const renderItem = ({ item }) => {
+    const MemberCard = ({ item, onPress }) => {
         const color = getStatusColor(item.status, item.current_expiry_date);
         const statusText = getStatusText(item.status, item.current_expiry_date);
 
         return (
-            <TouchableOpacity onPress={() => navigation.navigate('MemberDetail', { member: item })}>
+            <TouchableOpacity onPress={onPress}>
                 <View style={[styles.card, { position: 'relative', overflow: 'hidden' }]}>
                     {/* Status Pill in Top Right */}
                     <View style={{
@@ -182,7 +209,9 @@ export default function MembershipScreen({ navigation }) {
                                 <Text style={styles.avatarText}>{item.name.charAt(0)}</Text>
                             </View>
                             <View style={{ flex: 1, paddingRight: 60 }}>
-                                <Text style={{ fontSize: 20, fontWeight: '900', color: theme.colors.primary, marginBottom: 4 }}>{item.member_code}</Text>
+                                <Text style={{ fontSize: 20, fontWeight: '900', color: theme.colors.primary, marginBottom: 4 }}>
+                                    {item.status === 'pending' ? 'PENDING' : item.member_code}
+                                </Text>
                                 <Text style={styles.memberName}>{item.name}</Text>
                                 <Text style={styles.memberMeta}>
                                     {item.category || 'Umum'} • Ends {new Date(item.current_expiry_date).toLocaleDateString()}
@@ -217,9 +246,9 @@ export default function MembershipScreen({ navigation }) {
                 ) : (
                     <FlatList
                         data={filteredMembers}
-                        renderItem={renderItem}
                         keyExtractor={item => item.id.toString()}
                         contentContainerStyle={styles.listContent}
+                        renderItem={({ item }) => <MemberCard item={item} onPress={() => navigation.navigate('MemberDetail', { member: item })} />}
                         ListHeaderComponent={
                             <View>
                                 <View style={styles.searchSection}>
@@ -239,7 +268,7 @@ export default function MembershipScreen({ navigation }) {
                                     <FlatList
                                         horizontal
                                         showsHorizontalScrollIndicator={false}
-                                        data={['All', 'Mahasiswa', 'Umum', 'Couple', 'Expired']}
+                                        data={['All', 'Active', 'Pending', 'Mahasiswa', 'Umum', 'Couple', 'Expired']}
                                         keyExtractor={i => i}
                                         contentContainerStyle={{ paddingHorizontal: theme.spacing.l, gap: 12 }}
                                         renderItem={({ item }) => (

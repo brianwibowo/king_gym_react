@@ -28,7 +28,7 @@ export default function AddMemberModal({ visible, onClose, onSuccess }) {
     const fetchPackages = async () => {
         try {
             const response = await api.get('/packages');
-            setPackages(response.data);
+            setPackages(response.data.filter(p => !p.name.toLowerCase().includes('harian')));
         } catch (error) {
             console.error('Failed to fetch packages', error);
         }

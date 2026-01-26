@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useContext } from 'react';
-import { StyleSheet, Text, View, ScrollView, TouchableOpacity, Alert, TextInput, ActivityIndicator, Modal } from 'react-native';
+import { StyleSheet, Text, View, ScrollView, TouchableOpacity, Alert, TextInput, ActivityIndicator, Modal, RefreshControl } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { X, Save, Trash2, Calendar, Clock, CreditCard, RotateCw, Phone, MapPin } from 'lucide-react-native';
 import api from '../config/api';
@@ -12,6 +12,7 @@ export default function MemberDetailScreen({ route, navigation }) {
 
     const [member, setMember] = useState(initialMember);
     const [loading, setLoading] = useState(false);
+    const [refreshing, setRefreshing] = useState(false);
 
     // History State
     const [history, setHistory] = useState([]);
@@ -36,10 +37,89 @@ export default function MemberDetailScreen({ route, navigation }) {
     const [paymentMethod, setPaymentMethod] = useState('cash');
     const [renewLoading, setRenewLoading] = useState(false);
 
+    // Delete History State
+    const [isDeleteMode, setIsDeleteMode] = useState(false);
+    const [selectedHistoryIds, setSelectedHistoryIds] = useState([]);
+    const [deleteHistoryLoading, setDeleteHistoryLoading] = useState(false);
+
+    const toggleSelection = (id) => {
+        if (selectedHistoryIds.includes(id)) {
+            setSelectedHistoryIds(selectedHistoryIds.filter(itemId => itemId !== id));
+        } else {
+            setSelectedHistoryIds([...selectedHistoryIds, id]);
+        }
+    };
+
+    const handleDeleteHistory = async () => {
+        Alert.alert(
+            'Delete Transactions',
+            `Are you sure you want to delete ${selectedHistoryIds.length} items? This cannot be undone.`,
+            [
+                { text: 'Cancel' },
+                {
+                    text: 'Delete',
+                    style: 'destructive',
+                    onPress: async () => {
+                        try {
+                            setDeleteHistoryLoading(true);
+                            // Delete sequentially or parallel
+                            const deletePromises = selectedHistoryIds.map(id => api.delete(`/transactions/${id}`));
+                            await Promise.all(deletePromises);
+
+                            Alert.alert('Success', 'Transactions deleted');
+                            setIsDeleteMode(false);
+                            setSelectedHistoryIds([]);
+                            fetchHistory(); // Refresh list - critical!
+                            fetchMemberData(); // Refresh member status potentially
+                        } catch (error) {
+                            Alert.alert('Error', 'Failed to delete some items');
+                        } finally {
+                            setDeleteHistoryLoading(false);
+                        }
+                    }
+                }
+            ]
+        );
+    };
+
     useEffect(() => {
         fetchHistory();
         fetchPackages();
     }, []);
+
+    const onRefresh = React.useCallback(async () => {
+        setRefreshing(true);
+        try {
+            await Promise.all([
+                fetchMemberData(),
+                fetchHistory(),
+                fetchPackages()
+            ]);
+        } catch (error) {
+            console.error(error);
+        } finally {
+            setRefreshing(false);
+        }
+    }, [member.id]);
+
+    const fetchMemberData = async () => {
+        try {
+            const response = await api.get(`/members/${member.id}`);
+            const freshMember = response.data.data;
+            setMember(freshMember);
+            // Update form data in case we edit immediately after refresh
+            setFormData({
+                name: freshMember.name,
+                member_code: freshMember.member_code,
+                status: freshMember.status,
+                current_expiry_date: new Date(freshMember.current_expiry_date),
+                address: freshMember.address,
+                phone: freshMember.phone || ''
+            });
+        } catch (error) {
+            console.error("Failed to fetch fresh member data", error);
+        }
+    };
 
     const fetchHistory = async () => {
         try {
@@ -55,7 +135,7 @@ export default function MemberDetailScreen({ route, navigation }) {
     const fetchPackages = async () => {
         try {
             const response = await api.get('/packages');
-            setPackages(response.data);
+            setPackages(response.data.filter(p => !p.name.toLowerCase().includes('harian')));
         } catch (error) {
             console.error('Failed to fetch packages');
         }
@@ -66,9 +146,11 @@ export default function MemberDetailScreen({ route, navigation }) {
             setLoading(true);
             // Only send fields that allowed to be updated
             const payload = {
+                member_code: formData.member_code, // Add this!
                 name: formData.name,
                 address: formData.address,
-                phone: formData.phone
+                phone: formData.phone,
+                current_expiry_date: formData.current_expiry_date.toISOString().split('T')[0] // Send YYYY-MM-DD
             };
 
             const response = await api.put(`/members/${member.id}`, payload);
@@ -130,6 +212,7 @@ export default function MemberDetailScreen({ route, navigation }) {
     };
 
     const getStatusColor = (status, expiryDate) => {
+        if (status === 'pending') return '#FF9800'; // Orange
         if (status !== 'active') return theme.colors.danger;
         const now = new Date();
         const expiry = new Date(expiryDate);
@@ -158,7 +241,12 @@ export default function MemberDetailScreen({ route, navigation }) {
                 </TouchableOpacity>
             </View>
 
-            <ScrollView contentContainerStyle={styles.content}>
+            <ScrollView
+                contentContainerStyle={styles.content}
+                refreshControl={
+                    <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[theme.colors.primary]} />
+                }
+            >
                 {/* ID Card Style Header */}
                 <View style={[styles.card, { backgroundColor: theme.colors.card, borderColor: theme.colors.border }]}>
                     <View style={styles.cardHeader}>
@@ -166,126 +254,223 @@ export default function MemberDetailScreen({ route, navigation }) {
                             <Text style={styles.avatarText}>{member.name.charAt(0)}</Text>
                         </View>
                         <View style={{ flex: 1 }}>
-                            <Text style={[styles.memberCode, { color: theme.colors.primary }]}>{member.member_code}</Text>
-                            <View style={[styles.statusBadge, { backgroundColor: getStatusColor(member.status, member.current_expiry_date) }]}>
-                                <Text style={styles.statusText}>
-                                    {member.status === 'active' && new Date(member.current_expiry_date) < new Date() ? 'EXPIRED' : member.status.toUpperCase()}
-                                </Text>
+                            {isEditing ? (
+                                <View>
+                                    <TextInput
+                                        style={[styles.input, { color: theme.colors.text, borderColor: theme.colors.border, marginBottom: 10 }]}
+                                        value={formData.member_code}
+                                        onChangeText={(text) => setFormData({ ...formData, member_code: text })}
+                                        editable={member.status === 'pending'} // Only editable if Pending
+                                        placeholder={member.status === 'pending' ? "Enter New Member ID" : ""}
+                                    />
+                                    <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 5 }}>
+                                        <Text style={{ color: theme.colors.text, width: 100 }}>Name:</Text>
+                                        <TextInput
+                                            style={[styles.input, { flex: 1, color: theme.colors.text, borderColor: theme.colors.border, marginBottom: 0 }]}
+                                            value={formData.name}
+                                            onChangeText={(text) => setFormData({ ...formData, name: text })}
+                                        />
+                                    </View>
+
+                                    {/* Edit Expiry Date */}
+                                    <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 5 }}>
+                                        <Text style={{ color: theme.colors.text, width: 100 }}>Valid Until:</Text>
+                                        <TouchableOpacity
+                                            onPress={() => setShowDatePicker(true)}
+                                            style={[styles.input, { flex: 1, paddingVertical: 8, borderColor: theme.colors.border }]}
+                                        >
+                                            <Text style={{ color: theme.colors.text }}>
+                                                {formData.current_expiry_date.toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}
+                                            </Text>
+                                        </TouchableOpacity>
+                                    </View>
+                                    {
+                                        showDatePicker && (
+                                            <DateTimePicker
+                                                value={formData.current_expiry_date}
+                                                mode="date"
+                                                display="default"
+                                                onChange={(event, selectedDate) => {
+                                                    setShowDatePicker(false);
+                                                    if (selectedDate) {
+                                                        setFormData({ ...formData, current_expiry_date: selectedDate });
+                                                    }
+                                                }}
+                                            />
+                                        )
+                                    }
+
+                                </View >
+                            ) : (
+                                <View>
+                                    <Text style={[styles.memberCode, { color: theme.colors.primary }]}>{member.member_code}</Text>
+                                    <View style={[styles.statusBadge, { backgroundColor: getStatusColor(member.status, member.current_expiry_date) }]}>
+                                        <Text style={styles.statusText}>
+                                            {member.status === 'active' && new Date(member.current_expiry_date) < new Date() ? 'EXPIRED' : member.status.toUpperCase()}
+                                        </Text>
+                                    </View>
+                                </View>
+                            )
+                            }
+                        </View >
+                    </View >
+
+                    {
+                        isEditing ? (
+                            <View style={styles.form} >
+                                <Text style={[styles.label, { color: theme.colors.textSecondary }]}>Address</Text>
+                                <TextInput
+                                    style={[styles.input, { color: theme.colors.text, borderColor: theme.colors.border }]}
+                                    value={formData.address}
+                                    onChangeText={t => setFormData({ ...formData, address: t })}
+                                />
+
+                                <Text style={[styles.label, { color: theme.colors.textSecondary }]}>Phone Number</Text>
+                                <TextInput
+                                    style={[styles.input, { color: theme.colors.text, borderColor: theme.colors.border }]}
+                                    value={formData.phone}
+                                    keyboardType="phone-pad"
+                                    onChangeText={t => setFormData({ ...formData, phone: t })}
+                                />
+
+                                <TouchableOpacity style={[styles.saveBtn, { backgroundColor: theme.colors.primary }]} onPress={handleUpdate}>
+                                    {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveText}>Save Changes</Text>}
+                                </TouchableOpacity>
                             </View>
-                        </View>
-                    </View>
+                        ) : (
+                            <View style={styles.infoContainer}>
+                                <Text style={[styles.memberName, { color: theme.colors.text }]}>{member.name}</Text>
+                                <Text style={[styles.memberCategory, { color: theme.colors.textSecondary }]}>{member.category} Member</Text>
 
-                    {isEditing ? (
-                        <View style={styles.form}>
-                            <Text style={[styles.label, { color: theme.colors.textSecondary }]}>Name</Text>
-                            <TextInput
-                                style={[styles.input, { color: theme.colors.text, borderColor: theme.colors.border }]}
-                                value={formData.name}
-                                onChangeText={t => setFormData({ ...formData, name: t })}
-                            />
+                                <View style={styles.divider} />
 
-                            <Text style={[styles.label, { color: theme.colors.textSecondary }]}>Address</Text>
-                            <TextInput
-                                style={[styles.input, { color: theme.colors.text, borderColor: theme.colors.border }]}
-                                value={formData.address}
-                                onChangeText={t => setFormData({ ...formData, address: t })}
-                            />
+                                <View style={styles.infoRow}>
+                                    <MapPin size={18} color={theme.colors.textSecondary} />
+                                    <Text style={[styles.infoText, { color: theme.colors.text }]}>
+                                        {member.address || '-'}
+                                    </Text>
+                                </View>
 
-                            <Text style={[styles.label, { color: theme.colors.textSecondary }]}>Phone Number</Text>
-                            <TextInput
-                                style={[styles.input, { color: theme.colors.text, borderColor: theme.colors.border }]}
-                                value={formData.phone}
-                                keyboardType="phone-pad"
-                                onChangeText={t => setFormData({ ...formData, phone: t })}
-                            />
+                                <View style={styles.infoRow}>
+                                    <Phone size={18} color={theme.colors.textSecondary} />
+                                    <Text style={[styles.infoText, { color: theme.colors.text }]}>
+                                        {member.phone || '-'}
+                                    </Text>
+                                </View>
 
-                            <TouchableOpacity style={[styles.saveBtn, { backgroundColor: theme.colors.primary }]} onPress={handleUpdate}>
-                                {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveText}>Save Changes</Text>}
+                                <View style={styles.infoRow}>
+                                    <Calendar size={18} color={theme.colors.textSecondary} />
+                                    <Text style={[styles.infoText, { color: theme.colors.text }]}>
+                                        Valid until: <Text style={{ fontWeight: 'bold' }}>{new Date(member.current_expiry_date).toLocaleDateString('id-ID', { dateStyle: 'full' })}</Text>
+                                    </Text>
+                                </View>
+                            </View>
+                        )}
+                </View >
+
+                {/* Function Buttons */}
+                {
+                    !isEditing && (
+                        <View style={styles.actionButtons}>
+                            <TouchableOpacity style={[styles.actionBtn, { borderColor: theme.colors.primary, backgroundColor: theme.colors.primary }]} onPress={() => setRenewModalVisible(true)}>
+                                <RotateCw size={20} color="#fff" />
+                                <Text style={{ color: '#fff', fontWeight: 'bold', marginLeft: 8 }}>Renew Membership</Text>
+                            </TouchableOpacity>
+
+                            <TouchableOpacity style={[styles.actionBtn, { borderColor: theme.colors.danger }]} onPress={handleDelete}>
+                                <Trash2 size={20} color={theme.colors.danger} />
+                                <Text style={{ color: theme.colors.danger, fontWeight: '600', marginLeft: 8 }}>Delete</Text>
                             </TouchableOpacity>
                         </View>
-                    ) : (
-                        <View style={styles.infoContainer}>
-                            <Text style={[styles.memberName, { color: theme.colors.text }]}>{member.name}</Text>
-                            <Text style={[styles.memberCategory, { color: theme.colors.textSecondary }]}>{member.category} Member</Text>
+                    )
+                }
 
-                            <View style={styles.divider} />
-
-                            <View style={styles.infoRow}>
-                                <MapPin size={18} color={theme.colors.textSecondary} />
-                                <Text style={[styles.infoText, { color: theme.colors.text }]}>
-                                    {member.address || '-'}
-                                </Text>
-                            </View>
-
-                            <View style={styles.infoRow}>
-                                <Phone size={18} color={theme.colors.textSecondary} />
-                                <Text style={[styles.infoText, { color: theme.colors.text }]}>
-                                    {member.phone || '-'}
-                                </Text>
-                            </View>
-
-                            <View style={styles.infoRow}>
-                                <Calendar size={18} color={theme.colors.textSecondary} />
-                                <Text style={[styles.infoText, { color: theme.colors.text }]}>
-                                    Valid until: <Text style={{ fontWeight: 'bold' }}>{new Date(member.current_expiry_date).toLocaleDateString('id-ID', { dateStyle: 'full' })}</Text>
-                                </Text>
-                            </View>
-                        </View>
+                {/* History Section Header with Toggle Delete Mode */}
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 10, marginBottom: 16 }}>
+                    <Text style={[styles.sectionTitle, { color: theme.colors.text, marginBottom: 0, marginTop: 0 }]}>Subscription History</Text>
+                    {history.length > 0 && (
+                        <TouchableOpacity onPress={() => {
+                            if (isDeleteMode) {
+                                // Cancel mode
+                                setSelectedHistoryIds([]);
+                                setIsDeleteMode(false);
+                            } else {
+                                setIsDeleteMode(true);
+                            }
+                        }}>
+                            <Text style={{ color: isDeleteMode ? theme.colors.textSecondary : theme.colors.danger, fontWeight: 'bold' }}>
+                                {isDeleteMode ? 'Cancel' : 'Delete Items'}
+                            </Text>
+                        </TouchableOpacity>
                     )}
                 </View>
 
-                {/* Function Buttons */}
-                {!isEditing && (
-                    <View style={styles.actionButtons}>
-                        <TouchableOpacity style={[styles.actionBtn, { borderColor: theme.colors.primary, backgroundColor: theme.colors.primary }]} onPress={() => setRenewModalVisible(true)}>
-                            <RotateCw size={20} color="#fff" />
-                            <Text style={{ color: '#fff', fontWeight: 'bold', marginLeft: 8 }}>Renew Membership</Text>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity style={[styles.actionBtn, { borderColor: theme.colors.danger }]} onPress={handleDelete}>
-                            <Trash2 size={20} color={theme.colors.danger} />
-                            <Text style={{ color: theme.colors.danger, fontWeight: '600', marginLeft: 8 }}>Delete</Text>
-                        </TouchableOpacity>
-                    </View>
-                )}
-
-                {/* History Section */}
-                <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>Subscription History</Text>
-                {historyLoading ? (
-                    <ActivityIndicator size="small" color={theme.colors.primary} />
-                ) : history.length === 0 ? (
-                    <Text style={{ color: theme.colors.textSecondary, textAlign: 'center', marginTop: 20 }}>No history found</Text>
-                ) : (
-                    <View style={styles.historyList}>
-                        {history.map(item => (
-                            <View key={item.id} style={[styles.historyItem, { backgroundColor: theme.colors.card, borderColor: theme.colors.border }]}>
-                                <View style={styles.historyLeft}>
-                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                                        <Text style={[styles.historyAction, { color: theme.colors.text }]}>
-                                            {item.details[0]?.item_name || 'Membership'}
-                                        </Text>
-                                        {/* Show Date Range if Available */}
-                                        {item.membership_start_date && (
-                                            <View style={{ backgroundColor: theme.colors.primary + '20', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
-                                                <Text style={{ fontSize: 10, color: theme.colors.primary, fontWeight: 'bold' }}>
-                                                    {formatDateRange(item.membership_start_date, item.membership_end_date)}
-                                                </Text>
+                {
+                    historyLoading ? (
+                        <ActivityIndicator size="small" color={theme.colors.primary} />
+                    ) : history.length === 0 ? (
+                        <Text style={{ color: theme.colors.textSecondary, textAlign: 'center', marginTop: 20 }}>No history found</Text>
+                    ) : (
+                        <View style={styles.historyList}>
+                            {history.map(item => (
+                                <TouchableOpacity
+                                    key={item.id}
+                                    style={[styles.historyItem, { backgroundColor: theme.colors.card, borderColor: theme.colors.border }]}
+                                    disabled={!isDeleteMode}
+                                    onPress={() => toggleSelection(item.id)}
+                                >
+                                    {isDeleteMode && (
+                                        <View style={{ marginRight: 12 }}>
+                                            <View style={{
+                                                width: 20, height: 20, borderRadius: 4, borderWidth: 2,
+                                                borderColor: selectedHistoryIds.includes(item.id) ? theme.colors.danger : theme.colors.border,
+                                                backgroundColor: selectedHistoryIds.includes(item.id) ? theme.colors.danger : 'transparent',
+                                                justifyContent: 'center', alignItems: 'center'
+                                            }}>
+                                                {selectedHistoryIds.includes(item.id) && <X size={14} color="#fff" />}
                                             </View>
-                                        )}
-                                    </View>
+                                        </View>
+                                    )}
+                                    <View style={{ flex: 1 }}>
+                                        <View style={styles.historyLeft}>
+                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                                                <Text style={[styles.historyAction, { color: theme.colors.text }]}>
+                                                    {item.details[0]?.item_name || 'Membership'}
+                                                </Text>
 
-                                    <Text style={[styles.historyDate, { color: theme.colors.textSecondary }]}>
-                                        Trx Date: {new Date(item.created_at).toLocaleDateString('id-ID')}
-                                    </Text>
-                                </View>
-                                {/* Price Value Hidden as per request */}
-                                {/* <Text style={[styles.historyAmount, { color: theme.colors.success }]}>
-                                    Rp {item.total_amount.toLocaleString('id-ID')}
-                                </Text> */}
-                            </View>
-                        ))}
-                    </View>
-                )}
+                                                {item.membership_start_date && (
+                                                    <View style={{ backgroundColor: theme.colors.primary + '20', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
+                                                        <Text style={{ fontSize: 10, color: theme.colors.primary, fontWeight: 'bold' }}>
+                                                            {formatDateRange(item.membership_start_date, item.membership_end_date)}
+                                                        </Text>
+                                                    </View>
+                                                )}
+                                            </View>
+
+                                            <Text style={[styles.historyDate, { color: theme.colors.textSecondary }]}>
+                                                Trx Date: {new Date(item.created_at).toLocaleDateString('id-ID')}
+                                            </Text>
+                                        </View>
+                                    </View>
+                                </TouchableOpacity>
+                            ))}
+                        </View>
+                    )
+                }
+
+                {/* Confirm Delete Button (Floating or Bottom) */}
+                {
+                    isDeleteMode && selectedHistoryIds.length > 0 && (
+                        <TouchableOpacity
+                            style={[styles.saveBtn, { backgroundColor: theme.colors.danger, marginTop: 20 }]}
+                            onPress={handleDeleteHistory}
+                        >
+                            {deleteHistoryLoading ? <ActivityIndicator color="#fff" /> : (
+                                <Text style={styles.saveText}>Delete Selected ({selectedHistoryIds.length})</Text>
+                            )}
+                        </TouchableOpacity>
+                    )
+                }
 
                 {/* Renewal Modal */}
                 <Modal visible={renewModalVisible} transparent animationType="slide">
@@ -349,8 +534,8 @@ export default function MemberDetailScreen({ route, navigation }) {
                     </View>
                 </Modal>
 
-            </ScrollView>
-        </SafeAreaView>
+            </ScrollView >
+        </SafeAreaView >
     );
 }
 

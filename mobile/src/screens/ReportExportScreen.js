@@ -54,11 +54,14 @@ export default function ReportExportScreen({ navigation }) {
             const filename = `Laporan_${exportType}_${new Date().getTime()}.xlsx`;
             const fileUri = FileSystem.documentDirectory + filename;
 
-            const downloadRes = await FileSystem.downloadAsync(
+            // Use createDownloadResumable for better compatibility
+            const downloadResumable = FileSystem.createDownloadResumable(
                 downloadUrl,
                 fileUri,
                 { headers: { Authorization: `Bearer ${token}` } }
             );
+
+            const downloadRes = await downloadResumable.downloadAsync();
 
             if (downloadRes.status !== 200) {
                 Alert.alert('Error', 'Download failed. Check server logs.');

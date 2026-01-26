@@ -152,7 +152,8 @@ export default function RekapScreen({ navigation }) {
 
             const fileUri = FileSystem.documentDirectory + `laporan-${formattedDate}.xlsx`;
 
-            const downloadRes = await FileSystem.downloadAsync(
+            // Use createDownloadResumable to avoid deprecation issues with direct downloadAsync
+            const downloadResumable = FileSystem.createDownloadResumable(
                 `${BASE_URL}/export/excel`,
                 fileUri,
                 {
@@ -161,6 +162,8 @@ export default function RekapScreen({ navigation }) {
                     }
                 }
             );
+
+            const downloadRes = await downloadResumable.downloadAsync();
 
             if (downloadRes.status !== 200) {
                 Alert.alert('Error', 'Failed to download report.');
